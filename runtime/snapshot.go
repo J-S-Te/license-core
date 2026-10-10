@@ -223,7 +223,7 @@ func SignSnapshot(s PlatformSnapshot, kid string, private ed25519.PrivateKey) (s
 // both embedded licenses against the configured vendor keys.
 func VerifySnapshot(raw string, binding Binding, platformKeys, vendorKeys map[string]ed25519.PublicKey) (PlatformSnapshot, error) {
 	var s PlatformSnapshot
-	if !validBinding(binding) || len(raw) == 0 || len(raw) > maxBytes {
+	if !validBinding(binding) || len(raw) == 0 || len(raw) > maxBytes || len(platformKeys) == 0 || len(vendorKeys) == 0 {
 		return s, ErrInvalid
 	}
 	for _, platformKey := range platformKeys {

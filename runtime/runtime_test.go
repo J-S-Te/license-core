@@ -260,7 +260,9 @@ func TestVersionAndRevisionRollback(t *testing.T) {
 	ctx := context.Background()
 	s := f.snapshot()
 	f.apply(s)
-	if err := f.r.ApplySnapshot(ctx, f.sign(s), f.now); !errors.Is(err, ErrRollback) {
+	equivocation := s
+	equivocation.SnapshotIssuedAt++
+	if err := f.r.ApplySnapshot(ctx, f.sign(equivocation), f.now); !errors.Is(err, ErrRollback) {
 		t.Fatal(err)
 	}
 	s.Revision = 2
@@ -289,7 +291,7 @@ func TestClockLatchAndSignedRecovery(t *testing.T) {
 	ctx := context.Background()
 	s := f.snapshot()
 	f.apply(s)
-	if err := f.r.Evaluate(ctx, core.MUTATE_BUSINESS, f.now.Add(-300*time.Second)); !errors.Is(err, core.ErrDenied) {
+	if err := f.r.Evaluate(ctx, core.MUTATE_BUSINESS, f.now.Add(-300*time.Second)); err != nil {
 		t.Fatal("300 sec jitter should not latch", err)
 	}
 	if err := f.r.Evaluate(ctx, core.MUTATE_BUSINESS, f.now.Add(-301*time.Second)); !errors.Is(err, ErrClock) {
@@ -436,5 +438,65 @@ func TestFileTamperingAndCanceledLock(t *testing.T) {
 	}
 	if err := f.r.Evaluate(ctx, core.MUTATE_BUSINESS, f.now); !errors.Is(err, ErrState) {
 		t.Fatal("symlink state accepted", err)
+	}
+}
+
+func TestConcurrentProcesses(t *testing.T) {
+	f := newFixture(t)
+	f.apply(f.snapshot())
+	var wg sync.WaitGroup
+	failures := make(chan string, 4)
+	for i := 0; i < 4; i++ {
+		data, err := json.Marshal(struct {
+			Path             string
+			Binding          Binding
+			Platform, Vendor map[string]ed25519.PublicKey
+			Now              int64
+		}{f.path, f.binding, f.platformKeys, f.vendorKeys, f.now.Unix() + int64(i) + 60})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(os.Args[0], "-test.run=^TestProcessRestart$")
+		cmd.Env = append(os.Environ(), "LICENSE_RUNTIME_CHILD=1", "LICENSE_RUNTIME_CONFIG="+string(data))
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if output, err := cmd.CombinedOutput(); err != nil {
+				failures <- err.Error() + ": " + string(output)
+			}
+		}()
+	}
+	wg.Wait()
+	close(failures)
+	for err := range failures {
+		t.Fatal(err)
+	}
+	state, err := f.r.ReadState(context.Background())
+	if err != nil || state.ClockHighWater != f.now.Unix()+63 {
+		t.Fatal(state, err)
+	}
+}
+
+func TestSnapshotValidationAndImmutableTrust(t *testing.T) {
+	f := newFixture(t)
+	s := f.snapshot()
+	s.MigrationEligible = true
+	if _, err := SignSnapshot(s, "platform", f.platformPrivate); !errors.Is(err, ErrInvalid) {
+		t.Fatal("enforced migration bypass", err)
+	}
+	s = f.snapshot()
+	s.SnapshotIssuedAt = f.now.Unix() + 301
+	if err := f.r.ApplySnapshot(context.Background(), f.sign(s), f.now); !errors.Is(err, ErrInvalid) {
+		t.Fatal("future-issued snapshot accepted", err)
+	}
+	s = f.snapshot()
+	f.apply(s)
+	// The constructor owns independent key bytes and maps.
+	f.platformKeys["platform"][0] ^= 1
+	f.vendorKeys["vendor"][0] ^= 1
+	delete(f.platformKeys, "platform")
+	delete(f.vendorKeys, "vendor")
+	if err := f.r.Evaluate(context.Background(), core.MUTATE_BUSINESS, f.now); err != nil {
+		t.Fatal("caller changed runtime trust", err)
 	}
 }

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
@@ -66,6 +67,13 @@ func NewFileRuntime(path string, binding Binding, platformKeys, vendorKeys map[s
 	vk, err := copyKeys(vendorKeys)
 	if err != nil {
 		return nil, err
+	}
+	for _, platformKey := range pk {
+		for _, vendorKey := range vk {
+			if bytes.Equal(platformKey, vendorKey) {
+				return nil, ErrInvalid
+			}
+		}
 	}
 	return &FileRuntime{absolute, binding, pk, vk}, nil
 }
@@ -197,7 +205,8 @@ func (r *FileRuntime) observe(state *State, now int64) error {
 }
 
 // ApplySnapshot is an atomic control update, not a network synchronization
-// implementation. Old/equal revisions are rejected even when signed correctly.
+// implementation. Old revisions and equal-revision equivocation are rejected.
+// The exact already-persisted signed bytes may be replayed to retry an ACK.
 func (r *FileRuntime) ApplySnapshot(ctx context.Context, raw string, now time.Time) error {
 	next, err := VerifySnapshot(raw, r.binding, r.platformKeys, r.vendorKeys)
 	if err != nil {
@@ -214,6 +223,11 @@ func (r *FileRuntime) ApplySnapshot(ctx context.Context, raw string, now time.Ti
 		if err == nil {
 			if err := r.observe(&state, now.Unix()); err != nil {
 				return err
+			}
+			if next.Revision == state.ControlRevision && raw == state.SnapshotJWS {
+				// observe has durably advanced clock high-water (or rejected a
+				// latched rollback). No authorization dates or revisions change.
+				return nil
 			}
 			if next.Revision <= state.ControlRevision || next.HighestLicenseVersion < state.HighestLicenseVersion || rank(next.EnforcementState) < rank(old.EnforcementState) || next.SnapshotIssuedAt < old.SnapshotIssuedAt {
 				return ErrRollback
