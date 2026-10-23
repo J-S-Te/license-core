@@ -1,5 +1,5 @@
-// Package coverage inventories source registrations. It is a release gate, not
-// runtime authorization: symbolic routes and mixed workers remain unresolved.
+// Package coverage 盘点源码中的注册项，用于发布门禁。
+// 它不提供运行时授权；符号路由与混合职责工作进程仍须另行确认。
 package coverage
 
 import (
@@ -35,12 +35,12 @@ type Registry struct {
 }
 
 var files = map[string][]string{
-	"contract_management":      {"contract_management/internal/transport/httpapi/router.go"},
+	"contract_management":      {"contract_management/internal/transport/httpapi/router.go", "contract_management/internal/transport/httpapi/handover.go"},
 	"project_management":       {"project_management/internal/httpapi/api.go"},
 	"settlement":               {"Settlement/internal/httpapi/api.go"},
 	"data_analysis":            {"data_analysis/internal/bootstrap/app.go"},
 	"customer_portal":          {"customer_and_opportunity/internal/portalbootstrap/router.go"},
-	"customer_and_opportunity": {"customer_and_opportunity/internal/bootstrap/app.go"},
+	"customer_and_opportunity": {"customer_and_opportunity/internal/bootstrap/app.go", "customer_and_opportunity/internal/modules/handover/handler.go"},
 }
 
 func expression(f *token.FileSet, n ast.Node) string {
@@ -51,8 +51,8 @@ func expression(f *token.FileSet, n ast.Node) string {
 	return b.String()
 }
 
-// Scan counts source registration expressions, not expanded live routes. Loops,
-// conditional features and receiver groups must still be tested at runtime.
+// Scan 统计源码中的注册表达式，不统计展开后的实际路由。
+// 循环、条件功能与接收器分组仍须通过运行时测试确认。
 func Scan(root string) (Registry, error) {
 	r := Registry{Schema: 1, Scope: "source-registration-expressions; not live route denominator", SourceDigests: map[string]string{}}
 	inputs := map[string][]string{}
@@ -93,8 +93,8 @@ func Scan(root string) (Registry, error) {
 				if !strings.Contains("|GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|Any|Handle|HandleFunc|", "|"+sel.Sel.Name+"|") || len(call.Args) == 0 {
 					return true
 				}
-				// No matching selector means an HTTP registration. Restrict to reviewed
-				// router files; inventory unresolved selectors instead of silently losing them.
+				// 未匹配到选择器时按 HTTP 注册处理。仅扫描已审核的路由文件，
+				// 并记录无法解析的选择器，避免静默遗漏。
 				ordinal++
 				path := expression(fset, call.Args[0])
 				handler := "<missing>"
@@ -124,7 +124,7 @@ func Scan(root string) (Registry, error) {
 				r.Entries = append(r.Entries, e)
 				return true
 			})
-			// Settlement dispatches directly rather than registering Gin routes.
+			// Settlement 直接分派请求，不通过 Gin 路由注册。
 			if app == "settlement" {
 				for _, decl := range f.Decls {
 					fn, ok := decl.(*ast.FuncDecl)
@@ -169,12 +169,12 @@ func Scan(root string) (Registry, error) {
 			}
 		}
 	}
-	// Temporal registration of a struct does not enumerate its activities. Keep
-	// that entry unresolved rather than claiming one call equals full coverage.
+	// 向 Temporal 注册结构体并不会逐项列出其活动。
+	// 该条目保留为待确认状态，不能把一次注册视为完整覆盖。
 	taskFiles := map[string][]string{
 		"contract_management":      {"contract_management/internal/workflows/register.go", "contract_management/internal/workflows/activities.go"},
 		"customer_and_opportunity": {"customer_and_opportunity/internal/presaleworkflow/types.go"},
-		"project_management":       {"project_management/internal/application/delivery.go"},
+		"project_management":       {"project_management/internal/application/delivery.go", "project_management/internal/application/delivery_effects.go"},
 		"settlement":               {"Settlement/internal/reportexport/worker.go", "Settlement/internal/outbox/worker.go", "Settlement/internal/dunning/scanner.go", "Settlement/internal/taxreconcile/worker.go"},
 		"data_analysis":            {"data_analysis/internal/aggregation/worker.go", "data_analysis/internal/aggregation/aggregation.go", "data_analysis/internal/alertworker/worker.go"},
 	}
@@ -222,7 +222,7 @@ func Scan(root string) (Registry, error) {
 				if fn.Recv != nil && len(fn.Recv.List) > 0 && expression(fset, fn.Recv.List[0].Type) == "*Activities" {
 					r.Entries = append(r.Entries, Entry{ID: app + ":" + rel + ":activity:" + name, Application: app, Source: rel, Kind: "activity-method", Registration: "*Activities." + name, Operation: "MUTATE_BUSINESS", Reason: "Exported registered activity delegates approval, status/archive, notification generation or worklog publication persistence; check before side effects"})
 				}
-				if name != "RunOnce" && name != "ScanSlaNotifications" && name != "DispatchNotificationOutbox" {
+				if name != "RunOnce" && name != "ScanSlaNotifications" && name != "DispatchNotificationOutbox" && name != "DispatchDeliveryEffects" {
 					continue
 				}
 				op := "MUTATE_BUSINESS"
@@ -239,6 +239,9 @@ func Scan(root string) (Registry, error) {
 					op = "ESSENTIAL_SERVICE"
 					reason = "Only claims and delivers existing immutable notification outbox records; SLA generation separately gated"
 				}
+				if name == "DispatchDeliveryEffects" {
+					reason = "Creates automation/warning delivery events and new notification intents from queued effects; business license required before claim, not existing immutable notification delivery"
+				}
 				receiver := ""
 				if fn.Recv != nil && len(fn.Recv.List) > 0 {
 					receiver = expression(fset, fn.Recv.List[0].Type)
@@ -247,8 +250,8 @@ func Scan(root string) (Registry, error) {
 			}
 		}
 	}
-	// Inventory every executable command, including maintenance and manual worker
-	// modes. No command is assumed safe merely because Compose omits it.
+	// 盘点所有可执行命令，包括维护命令与手动工作进程模式。
+	// 不能仅因 Compose 未包含某命令就认定其安全。
 	roots := map[string]string{"contract_management": "contract_management", "project_management": "project_management", "settlement": "Settlement", "data_analysis": "data_analysis", "customer_and_opportunity": "customer_and_opportunity"}
 	for app, dir := range roots {
 		commands, err := filepath.Glob(filepath.Join(root, dir, "cmd/*/main.go"))
@@ -285,6 +288,10 @@ func Scan(root string) (Registry, error) {
 				e.Operation = "ESSENTIAL_SERVICE"
 				e.Reason = "Only processes existing security revocation/disable tasks, not account provisioning"
 			}
+			if app == "data_analysis" && name == "sync-job-recover-legacy" {
+				e.Operation = "ESSENTIAL_SERVICE"
+				e.Reason = "Exact audited maintenance executable: default dry-run; apply requires root, local Docker stopped-worker proof, deployment lock and generation-zero legacy rows. It only restores queue eligibility; licensed worker separately gates every claim and business write"
+			}
 			if name == "worker" && app == "contract_management" {
 				e.Operation = "MUTATE_BUSINESS"
 				e.Reason = "Approval/status/archive worker activities and daily archive scheduling are business mutations"
@@ -310,39 +317,41 @@ func Scan(root string) (Registry, error) {
 	if err := reviewRemainingTasks(root, &r); err != nil {
 		return r, err
 	}
+	if err := fingerprintExecutionSources(root, &r); err != nil {
+		return r, err
+	}
 	sort.Slice(r.Entries, func(i, j int) bool { return r.Entries[i].ID < r.Entries[j].ID })
 	return r, nil
 }
 
 func classify(e *Entry, method, path, handler string) {
-	// Operator-approved policy: BI can trigger current upstream computation;
-	// expired licenses retain ordinary history reads/exports, not embedding.
+	// 经操作者批准的策略：BI 嵌入可能触发上游实时计算；
+	// 授权到期后仅保留普通历史查询与导出，不保留嵌入能力。
 	if e.Source == "data_analysis/internal/bootstrap/app.go" && method == "GET" &&
 		(e.Registration == `api.GET("/embed/:dashboard") -> <anonymous>` || e.Registration == `embedProxy.GET("/:token") -> <anonymous>` || e.Registration == `embedProxy.GET("/:token/*resource") -> <anonymous>`) {
 		e.Operation = "MUTATE_BUSINESS"
 		e.Reason = "User-approved expiry policy: prohibit BI embedding and proxy resources; preserve separately classified history reads and exports"
 		return
 	}
-	// These are exact reviewed paths, never all GETs or handler-name heuristics.
-	essential := map[string]bool{`"/healthz"`: true, `"/livez"`: true, `"/readyz"`: true, `"/auth/login"`: true, `"/auth/callback"`: true, `"/auth/logout"`: true, `"/auth/local-logout"`: true, `"/auth/backchannel-logout"`: true, `"/logged-out"`: true, `"/auth/me"`: true}
-	if essential[path] {
+	// 仅放行已审核的精确路径，不按所有 GET 请求或处理器名称推断豁免。
+	if reviewedIdentityRegistrations[e.Source+"|"+e.Registration] {
 		e.Operation = "ESSENTIAL_SERVICE"
 		e.Reason = "Exact health or identity/session lifecycle endpoint; authentication remains independent"
 		return
 	}
-	reviewed := map[string]string{
-		"h.previewTemplate": "READ_HISTORY", "h.exportContract": "EXPORT_HISTORY", "h.downloadApprovedDOCX": "EXPORT_HISTORY", "h.downloadApprovedPDF": "EXPORT_HISTORY", "h.downloadStampedPDF": "EXPORT_HISTORY", "h.exportCapabilities": "EXPORT_HISTORY", "h.countSignedContractsByOpportunity": "READ_HISTORY",
-		"h.createContract": "MUTATE_BUSINESS", "h.createExternalContract": "MUTATE_BUSINESS", "h.submitApproval": "MUTATE_BUSINESS", "h.activateContract": "MUTATE_BUSINESS", "h.submitFieldRecord": "MUTATE_BUSINESS", "h.completeServiceItemField": "MUTATE_BUSINESS",
-		"createProjectExport(deps)": "EXPORT_HISTORY", "createProjectExportGrant(deps)": "EXPORT_HISTORY", "downloadProjectExport(deps)": "EXPORT_HISTORY", "createReportGrant(deps)": "EXPORT_HISTORY", "downloadReport(deps)": "EXPORT_HISTORY", "reconciliationSnapshot(deps)": "READ_HISTORY", "createReport(deps)": "MUTATE_BUSINESS", "provision(deps)": "MUTATE_BUSINESS", "syncProjectAccess(deps)": "MUTATE_BUSINESS",
-	}
-	if op, ok := reviewed[handler]; ok {
+	if op := basicHandlerOperation(e.Source, handler); op != "" {
 		e.Operation = op
 		e.Reason = "Explicit handler reviewed in commercial-license module entry matrix; retain ordinary scope checks"
 	}
+	if e.Source == "customer_and_opportunity/internal/portalbootstrap/router.go" && handler == "exportFiling(deps)" {
+		e.Operation = "EXPORT_HISTORY"
+		e.Reason = "Reviewed existing submitted filing snapshot PDF export with version/SHA verification and export audit only; identity, data scope and runtime license remain required"
+	}
 	_ = method
+	_ = path
 }
 
-// Check fails closed on stale source, unknown entries, and unresolved coverage.
+// Check 在源码过期、条目未知或覆盖范围未确认时拒绝放行。
 func Check(current, saved Registry) error {
 	a, _ := json.Marshal(current.SourceDigests)
 	b, _ := json.Marshal(saved.SourceDigests)

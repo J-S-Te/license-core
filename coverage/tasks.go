@@ -12,8 +12,8 @@ import (
 	"strconv"
 )
 
-// Finite policies review execution, not the executable's transport/liveness.
-// The implementation files are fingerprinted independently of command wrappers.
+// 有限策略审核任务执行行为，不审核可执行程序的传输或存活机制。
+// 实现文件独立于命令包装层计算指纹。
 func reviewRemainingTasks(root string, r *Registry) error {
 	commands := map[string]string{
 		"notification-delivery-worker":           "ESSENTIAL_SERVICE",
@@ -41,6 +41,11 @@ func reviewRemainingTasks(root string, r *Registry) error {
 		{"customer_and_opportunity", "customer_and_opportunity/internal/presaleassignmentnotificationworker/worker.go", "RunOnce", "MUTATE_BUSINESS", "Materialize assignment evidence into notification records"},
 		{"customer_and_opportunity", "customer_and_opportunity/internal/presaleprogressnotificationworker/worker.go", "RunOnce", "MUTATE_BUSINESS", "Materialize progress evidence into notification records"},
 		{"customer_and_opportunity", "customer_and_opportunity/internal/modules/portalinvite/service.go", "Verify", "ESSENTIAL_SERVICE", "Validate existing identity invitation; only expire invalid invitations and record verification audit, never consume or provision"},
+		{"contract_management", "contract_management/internal/auditoutbox/dispatcher.go", "Run", "ESSENTIAL_SERVICE", "Deliver only persisted immutable audit events; no business generation or replay"},
+		{"project_management", "project_management/internal/auditoutbox/dispatcher.go", "Run", "ESSENTIAL_SERVICE", "Deliver only persisted immutable audit events; no delivery-effect generation"},
+		{"data_analysis", "data_analysis/internal/auditoutbox/dispatcher.go", "Run", "ESSENTIAL_SERVICE", "Deliver only persisted immutable audit events; no aggregation or alerts"},
+		{"customer_and_opportunity", "customer_and_opportunity/internal/shared/requestaudit/dispatcher.go", "Run", "ESSENTIAL_SERVICE", "Deliver only persisted request audit events; no new business intents"},
+		{"settlement", "Settlement/internal/service/credit_sync_worker.go", "RunOnce", "MUTATE_BUSINESS", "Claim and publish credit business events; recheck before claim and each external side effect; retain paused leases"},
 	}
 	for _, t := range tasks {
 		raw, err := os.ReadFile(filepath.Join(root, t.source))
@@ -65,8 +70,8 @@ func reviewRemainingTasks(root string, r *Registry) error {
 		}
 		r.Entries = append(r.Entries, Entry{ID: t.app + ":" + t.source + ":reviewed-task:" + t.name, Application: t.app, Source: t.source, Registration: t.name, Kind: "task-policy", Operation: t.op, Reason: t.reason})
 	}
-	// These policies are keyed to actual task declarations already inventoried.
-	// Their parent files and command wrappers are independently fingerprinted.
+	// 这些策略按已盘点的实际任务声明匹配。
+	// 任务所在文件与命令包装层分别计算指纹。
 	parents := append([]Entry(nil), r.Entries...)
 	for _, e := range parents {
 		if e.Operation != "MIXED_EXECUTION" {
@@ -75,16 +80,17 @@ func reviewRemainingTasks(root string, r *Registry) error {
 		policies := map[string]string{}
 		if e.Application == "settlement" {
 			policies = map[string]string{"PLATFORM_AUDIT": "ESSENTIAL_SERVICE", "PLATFORM_NOTIFICATION": "ESSENTIAL_SERVICE", "TAX_INVOICE_COMMAND": "MUTATE_BUSINESS"}
-			// Only this exact license consumer synchronizer is essential. Other Run
-			// receivers continue to require review, even in the same process.
+			// 仅此处精确匹配的授权消费端同步器属于必要任务。
+			// 即使在同一进程内，其他 Run 接收器仍须审核。
 			policies["commercialGate.Run"] = "ESSENTIAL_SERVICE"
 			if e.Kind == "executable" {
+				policies["service.CreditSyncWorker.RunOnce"] = "MUTATE_BUSINESS"
 				policies["dunning.Scanner.RunOnce"] = "MUTATE_BUSINESS"
 				policies["taxreconcile.Worker.RunOnce"] = "MUTATE_BUSINESS"
 				policies["reportexport.Worker.RunOnce"] = "EXPORT_HISTORY"
 			}
 		} else if e.Application == "project_management" {
-			policies = map[string]string{"Service.ScanSlaNotifications": "MUTATE_BUSINESS", "Service.DispatchNotificationOutbox": "ESSENTIAL_SERVICE"}
+			policies = map[string]string{"Service.ScanSlaNotifications": "MUTATE_BUSINESS", "Service.DispatchDeliveryEffects": "MUTATE_BUSINESS", "Service.DispatchNotificationOutbox": "ESSENTIAL_SERVICE"}
 		}
 		for name, op := range policies {
 			r.Entries = append(r.Entries, Entry{ID: e.ID + ":policy:" + name, Application: e.Application, Source: e.Source, Kind: "task-policy", Registration: name, Operation: op, Reason: "Finite reviewed execution policy; gate before task claim and side effect, never extrapolate to unknown tasks/destinations"})
@@ -96,8 +102,8 @@ func reviewRemainingTasks(root string, r *Registry) error {
 	return nil
 }
 
-// Reconcile actual dispatch declarations/calls with the finite reviewed set.
-// A new RunOnce call or destination never inherits a mixed-process exemption.
+// 将实际调度声明及调用与已审核的有限集合核对。
+// 新增的 RunOnce 调用或目标不得继承混合职责进程的豁免。
 func discoverMixedTasks(root string, r *Registry, parent Entry) error {
 	source := parent.Source
 	if parent.Application == "settlement" {
@@ -114,9 +120,9 @@ func discoverMixedTasks(root string, r *Registry, parent Entry) error {
 	if err != nil {
 		return err
 	}
-	knownCalls := map[string]bool{"scanner.RunOnce": true, "taxReconciler.RunOnce": true, "exporter.RunOnce": true, "worker.Run": true, "commercialGate.Run": true}
+	knownCalls := map[string]bool{"scanner.RunOnce": true, "taxReconciler.RunOnce": true, "exporter.RunOnce": true, "worker.Run": true, "commercialGate.Run": true, "creditWorker.RunOnce": true}
 	if parent.Application == "project_management" {
-		knownCalls = map[string]bool{"service.ScanSlaNotifications": true, "service.DispatchNotificationOutbox": true}
+		knownCalls = map[string]bool{"service.ScanSlaNotifications": true, "service.DispatchDeliveryEffects": true, "service.DispatchNotificationOutbox": true}
 	}
 	knownDest := map[string]bool{"PLATFORM_AUDIT": true, "PLATFORM_NOTIFICATION": true, "TAX_INVOICE_COMMAND": true}
 	seenCalls, seenDest := map[string]bool{}, map[string]bool{}
@@ -125,7 +131,7 @@ func discoverMixedTasks(root string, r *Registry, parent Entry) error {
 	}
 	ast.Inspect(f, func(n ast.Node) bool {
 		if call, ok := n.(*ast.CallExpr); ok {
-			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && (sel.Sel.Name == "RunOnce" || sel.Sel.Name == "ScanSlaNotifications" || sel.Sel.Name == "DispatchNotificationOutbox" || sel.Sel.Name == "Run") {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && (sel.Sel.Name == "RunOnce" || sel.Sel.Name == "ScanSlaNotifications" || sel.Sel.Name == "DispatchNotificationOutbox" || sel.Sel.Name == "DispatchDeliveryEffects" || sel.Sel.Name == "Run") {
 				name := expression(fs, sel)
 				seenCalls[name] = true
 				if !knownCalls[name] {

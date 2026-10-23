@@ -15,7 +15,7 @@ func TestMixedPolicyDoesNotExemptNewTaskOrDestination(t *testing.T) {
 	}
 	base := `package main
 func main() {
- scanner.RunOnce(ctx); taxReconciler.RunOnce(ctx); exporter.RunOnce(ctx); worker.Run(ctx); commercialGate.Run(ctx, nil)
+ scanner.RunOnce(ctx); taxReconciler.RunOnce(ctx); exporter.RunOnce(ctx); worker.Run(ctx); commercialGate.Run(ctx, nil); creditWorker.RunOnce(ctx)
  _ = outbox.Destination{Name:"PLATFORM_AUDIT"}
  _ = outbox.Destination{Name:"PLATFORM_NOTIFICATION"}
  _ = outbox.Destination{Name:"TAX_INVOICE_COMMAND"}
@@ -78,7 +78,7 @@ func TestNoHTTPMethodBlanketPolicy(t *testing.T) {
 			t.Fatal("unreviewed route allowed")
 		}
 	}
-	e := Entry{Operation: "UNCLASSIFIED"}
+	e := Entry{Source: "contract_management/internal/transport/httpapi/router.go", Operation: "UNCLASSIFIED"}
 	classify(&e, "POST", `"/contract-templates/:id/preview"`, "h.previewTemplate")
 	if e.Operation != "READ_HISTORY" {
 		t.Fatal("POST read preview misclassified")
@@ -105,6 +105,12 @@ func TestReviewedHandlersAreSourceScoped(t *testing.T) {
 		{"customer_and_opportunity/internal/modules/customer/routes.go", "handler.PreviewImport", "MUTATE_BUSINESS"},
 		{"customer_and_opportunity/internal/modules/customer/routes.go", "handler.CreateExport", "EXPORT_HISTORY"},
 		{"data_analysis/internal/bootstrap/app.go", "dashboardHandler.Project", "READ_HISTORY"},
+		{"data_analysis/internal/bootstrap/app.go", `dashboardHandler.Business("report")`, "READ_HISTORY"},
+		{"data_analysis/internal/bootstrap/app.go", `dashboardHandler.Business("finance")`, "READ_HISTORY"},
+		{"data_analysis/internal/bootstrap/app.go", `dashboardHandler.Business("unreviewed")`, "UNCLASSIFIED"},
+		{"other/routes.go", `dashboardHandler.Business("report")`, "UNCLASSIFIED"},
+		{"Settlement/internal/httpapi/api.go", "a.recoverInvoiceFailure", "MUTATE_BUSINESS"},
+		{"other/routes.go", "a.recoverInvoiceFailure", "UNCLASSIFIED"},
 		{"data_analysis/internal/bootstrap/app.go", "adminHandler.TriggerAllSources", "MUTATE_BUSINESS"},
 		{"customer_and_opportunity/internal/modules/notification/routes.go", "handler.MarkRead", "ESSENTIAL_SERVICE"},
 		{"customer_and_opportunity/internal/modules/portalinvite/routes.go", "handler.Verify", "ESSENTIAL_SERVICE"},
@@ -115,5 +121,41 @@ func TestReviewedHandlersAreSourceScoped(t *testing.T) {
 		if e.Operation != tc.op {
 			t.Fatalf("%s %s: got %s want %s", tc.source, tc.handler, e.Operation, tc.op)
 		}
+	}
+}
+
+func TestProjectMixedDeliveryEffectsRequiresExactReviewedReceiver(t *testing.T) {
+	root := t.TempDir()
+	source := "project_management/cmd/sla-notifier/main.go"
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(root, source)), 0700); err != nil {
+		t.Fatal(err)
+	}
+	base := `package main
+func main() {
+ service.ScanSlaNotifications(ctx); service.DispatchDeliveryEffects(ctx); service.DispatchNotificationOutbox(ctx)
+ EXTRA
+}`
+	for _, extra := range []string{"", "unknown.DispatchDeliveryEffects(ctx)", "newBusiness.RunOnce(ctx)"} {
+		if err := os.WriteFile(filepath.Join(root, source), []byte(strings.ReplaceAll(base, "EXTRA", extra)), 0600); err != nil {
+			t.Fatal(err)
+		}
+		r := Registry{SourceDigests: map[string]string{}}
+		parent := Entry{ID: "project-mixed", Application: "project_management", Source: source, Operation: "MIXED_EXECUTION"}
+		if err := discoverMixedTasks(root, &r, parent); err != nil {
+			t.Fatal(err)
+		}
+		if extra == "" && len(r.Entries) != 0 {
+			t.Fatalf("reviewed project dispatch unexpectedly unresolved: %+v", r.Entries)
+		}
+		if extra != "" && (len(r.Entries) != 1 || r.Entries[0].Operation != "UNCLASSIFIED") {
+			t.Fatalf("new receiver/task inherited reviewed policy: %+v", r.Entries)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, source), []byte(strings.ReplaceAll(strings.ReplaceAll(base, "EXTRA", ""), "service.DispatchDeliveryEffects(ctx);", "")), 0600); err != nil {
+		t.Fatal(err)
+	}
+	r := Registry{SourceDigests: map[string]string{}}
+	if err := discoverMixedTasks(root, &r, Entry{ID: "project-mixed", Application: "project_management", Source: source, Operation: "MIXED_EXECUTION"}); err == nil || !strings.Contains(err.Error(), "reviewed mixed task removed") {
+		t.Fatalf("removed reviewed effects dispatch not rejected: %v", err)
 	}
 }
