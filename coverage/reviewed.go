@@ -2,10 +2,10 @@ package coverage
 
 import "strings"
 
-// These are finite, source-scoped handler allowlists, reviewed against the
-// commercial-license entry matrices and handler/service bodies. New names do
-// not inherit a policy. Persisted-ledger SUM/filtering is historical query,
-// unlike aggregation ingestion, new alert generation or business progression.
+// 这些处理器允许列表限定于有限的源码范围，已对照商业授权入口矩阵
+// 及处理器和服务实现审核；新增名称不得继承已有策略。
+// 对持久化台账求和或筛选属于历史查询，
+// 聚合采集、生成新告警及推进业务状态则不属于历史查询。
 var semanticGroups = map[string]map[string]string{
 	"contract_management/internal/transport/httpapi/router.go": {
 		"READ_HISTORY":      "h.dashboard h.listSettlementCompletedContracts h.listProjectApprovedContracts h.listProjectApprovedContractReferences h.getProjectApprovedContract h.getProjectApprovedContractServiceItems h.listOpportunityIntakes h.getOpportunityIntake h.listDetectionCategories h.listContracts h.listApprovedContracts h.listSigningRecords h.getSigningRecord h.getContract h.listContractLifecycle h.previewContract h.listTemplates h.listApprovals h.listTasks h.getApproval h.previewApprovalContract h.listRules",
@@ -33,8 +33,9 @@ var semanticGroups = map[string]map[string]string{
 		"MUTATE_BUSINESS": "handler.CreateCatalogItem handler.UpdateCatalogItem handler.DeleteCatalogItem handler.UpdateStageAlertRule handler.Create handler.Update handler.ChangeOwner handler.ReplaceMembers handler.Void handler.Restore handler.ChangeStage handler.CreateFollowup handler.LaunchQuotation handler.LaunchBid handler.CompleteTerminalTodo handler.ContractTransfer handler.CreateAttachmentUpload handler.UploadAttachmentContent handler.CompleteAttachmentUpload handler.ApplyExternalStatus handler.ContractLinkCallback handler.ApplyAttachmentScan",
 		"EXPORT_HISTORY":  "handler.DownloadAttachment", "ESSENTIAL_SERVICE": "handler.ReadStageAlert",
 	},
-	"customer_and_opportunity/internal/modules/ownerdirectory/routes.go": {"READ_HISTORY": "handler.List"},
-	"customer_and_opportunity/internal/modules/portalinvite/routes.go":   {"READ_HISTORY": "handler.Current", "MUTATE_BUSINESS": "handler.Create handler.Consume", "ESSENTIAL_SERVICE": "handler.Verify handler.Revoke handler.Disable"},
+	"customer_and_opportunity/internal/modules/ownerdirectory/routes.go":        {"READ_HISTORY": "handler.List"},
+	"customer_and_opportunity/internal/modules/portalinvite/routes.go":          {"READ_HISTORY": "handler.Current", "MUTATE_BUSINESS": "handler.Create handler.Consume", "ESSENTIAL_SERVICE": "handler.Verify handler.Revoke handler.Disable"},
+	"customer_and_opportunity/internal/modules/portalreportreference/routes.go": {"READ_HISTORY": "handler.GetDownloadIdentity"},
 	"customer_and_opportunity/internal/modules/presale/routes.go": {
 		"READ_HISTORY":    "handler.ExecutionDepartments handler.ListRequests handler.Board handler.FilterOptions handler.RequestDetail handler.ContactPhone handler.Timeline handler.AvailableActions handler.ApprovalHistory handler.Assignments handler.Worklogs handler.AlertRules handler.ApprovalRules handler.Alerts handler.ReportSummary handler.ReportTrend handler.ReportDistribution handler.ReportFilterOptions",
 		"MUTATE_BUSINESS": "handler.CreateRequest handler.ReopenRequest handler.ApprovalAction handler.ReplaceAssignments handler.SelectExecutionDepartment handler.AddProgress handler.Complete handler.Cancel handler.AddWorklog handler.UpdateAlertRule handler.CreateApprovalRule handler.UpdateApprovalRule handler.DeleteApprovalRule handler.ApprovalCallback",
@@ -47,7 +48,7 @@ var semanticGroups = map[string]map[string]string{
 		"EXPORT_HISTORY":    "unsupported(\"PORTAL_FILING_EXPORT_NOT_CONFIGURED\")",
 	},
 	"data_analysis/internal/bootstrap/app.go": {
-		"READ_HISTORY":    "alertHandler.List alertHandler.Summary dictHandler.Get dictHandler.History dashboardHandler.Contract dashboardHandler.Project dashboardHandler.Contracts dashboardHandler.Trend adminHandler.ListSources adminHandler.ListAlertRules",
+		"READ_HISTORY":    "alertHandler.List alertHandler.Summary dictHandler.Get dictHandler.History dashboardHandler.Contract dashboardHandler.Project dashboardHandler.Business(\"report\") dashboardHandler.Business(\"finance\") dashboardHandler.Contracts dashboardHandler.Trend adminHandler.ListSources adminHandler.ListAlertRules",
 		"MUTATE_BUSINESS": "dictHandler.Put dictHandler.Create dictHandler.Update dictHandler.SetEnabled dictHandler.Delete adminHandler.TriggerAllSources adminHandler.PutAlertRules",
 	},
 	"project_management/internal/httpapi/api.go": {
@@ -58,12 +59,15 @@ var semanticGroups = map[string]map[string]string{
 	"Settlement/internal/httpapi/api.go": {
 		"READ_HISTORY":      "a.dashboard a.invoicedReceivablesTop10 a.reportExport a.listPlans a.listReceivables a.listReceipts a.receiptMatches a.listAllocations a.listInvoiceRequests a.listTaxInvoices a.taxInvoiceDetail a.listDunningPolicies a.listDunningCases a.listDunningActions a.listDunningRecipients a.listNotifications a.unreadCount",
 		"EXPORT_HISTORY":    "a.createInvoicedReceivablesExport a.createAgingReceivablesExport a.downloadReportExport a.downloadInvoiceDocument",
-		"MUTATE_BUSINESS":   "a.contractEvent a.taxResult a.retryCreditSync a.confirmPlan a.createReceipt a.createAllocation a.reverseAllocation a.uploadInvoiceDocument a.requestInvoiceRedFlush a.reviewInvoiceRedFlush a.createInvoiceRequest a.approveInvoiceRequest a.rejectInvoiceRequest a.manualIssueInvoice a.createDunningPolicy",
+		"MUTATE_BUSINESS":   "a.contractEvent a.taxResult a.retryCreditSync a.confirmPlan a.createReceipt a.createAllocation a.reverseAllocation a.uploadInvoiceDocument a.requestInvoiceRedFlush a.reviewInvoiceRedFlush a.createInvoiceRequest a.approveInvoiceRequest a.recoverInvoiceFailure a.rejectInvoiceRequest a.manualIssueInvoice a.createDunningPolicy",
 		"ESSENTIAL_SERVICE": "a.login a.me a.readNotification",
 	},
 }
 
 func semanticClassify(e *Entry, handler string) {
+	if upgradeSemanticClassify(e, handler) {
+		return
+	}
 	for op, list := range semanticGroups[e.Source] {
 		normalized := strings.ReplaceAll(handler, " ", "")
 		for _, name := range strings.Fields(list) {
@@ -72,6 +76,12 @@ func semanticClassify(e *Entry, handler string) {
 			}
 			e.Operation = op
 			e.Reason = "Source-scoped semantic review: " + handler + "; existing auth, tenant/data-scope and audit requirements remain enforced"
+			if strings.HasPrefix(name, "dashboardHandler.Business(") {
+				e.Reason += "; reads an existing tenant-scoped business_dashboard_snapshot only; does not trigger aggregation or write a new projection"
+			}
+			if name == "a.recoverInvoiceFailure" {
+				e.Reason += "; transactional failed-invoice review returns ISSUE_FAILED to SUBMITTED and increments version; does not issue a tax command but advances business state"
+			}
 			if handler == "handler.RequestReportExport" || strings.HasPrefix(handler, "unsupported(") {
 				e.Reason += "; currently returns explicit unavailable error, classification is not proof export works"
 			}

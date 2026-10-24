@@ -9,6 +9,11 @@ user's business mutation as essential to make it pass.
 
 ## Signed control contract
 
+Source checked 2026-10-22: snapshot protocol remains `1`. Component registration
+V2/catalog version `1` is a separate contract handled by catalog/consumer/syncclient;
+it does not change these signed fields or relax verification and durable-state
+rules. See [syncclient](../syncclient/README.md).
+
 `PlatformSnapshot` has exact, required JSON fields: `protocol`, `instanceID`,
 `environment`, `application`, `serviceID`, `revision`, `enforcementState`,
 `migrationEligible`, `currentLicenseJWS`, `pendingLicenseJWS`,
@@ -16,9 +21,10 @@ user's business mutation as essential to make it pass.
 mean absence. `snapshotIssuedAt` and all license validity times are Unix seconds.
 
 `SignSnapshot` emits compact Ed25519 JWS with `typ` equal to
-`platform-runtime-snapshot+jws`. The runtime takes its trusted platform public
-keys and its independently trusted vendor public keys from deployment
-configuration, never the token. A platform snapshot cannot stand in for a
+`platform-runtime-snapshot+jws`. The runtime receives platform and independently
+trusted vendor public keys from its caller, never the token. The shared production
+consumer deploys platform trust read-only and compiles vendor trust into the
+reviewed release. A platform snapshot cannot stand in for a
 commercial license; the outer snapshot and both embedded commercial licenses
 are verified independently. Duplicate fields, unknown fields, aliases, missing
 or null fields, noncanonical base64url and wrong bindings are rejected. Signing
@@ -106,6 +112,14 @@ GOOS=linux GOARCH=amd64 go build ./runtime
 ```
 
 This subpackage does not change the root commercial-license source files. The
-existing consumer snapshot/vendor script has a fixed root-file allowlist and
-must be deliberately expanded to recursively include this package before a
-consumer imports it; do not silently copy issuer tools or private keys.
+existing mirror scripts already include reviewed runtime/syncclient/consumer
+sources for business consumers; preserve their exact allowlist and digest
+manifest checks. Do not copy issuer tools or private keys.
+
+## Operator checks (2026-10-13)
+
+Deployment administrators protect one durable volume per component, deliver the approved binding/public key and follow the [activation guide](../../sharedDocs/09_商业授权/03_运行时协调与激活说明.md). Confirm latest signed revision and independent ACK; state-file presence is insufficient. Do not edit JSON/delete the lock as recovery. Diagnose missing/corrupt state and obtain the latest authenticated snapshot.
+
+History-only expiry is not a time-limited grace period and does not permit absent/future applications or clock-blocked state. Outages preserve state and absolute dates. Library RecoverClock exists, but normal consumer synchronization does not call it; a Platform recovery event cannot prove local recovery. Workers stay alive for synchronization and retry timers.
+
+Evidence: consumer/consumer.go FromLookup/Check → syncclient/client.go SyncOnce → state.go ApplySnapshot/load/save/Evaluate and snapshot.go VerifySnapshot. Business mirror scripts already include reviewed runtime/syncclient/consumer sources. This pass did not execute tests, inspect live volumes or exercise recovery.

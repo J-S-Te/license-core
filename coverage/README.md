@@ -27,8 +27,8 @@ Known attachment boundaries:
 
 - Contract: `internal/transport/httpapi/router.go` after identity; application
   service methods before persistent changes; `workflows.Activities` before each
-  side effect. Cron scheduling is new business; do not stop the API's embedded
-  worker container to implement history-only mode.
+  side effect. Cron scheduling is new business; licensed production uses split
+  API and Worker components. Keep both alive for history-only mode.
 - CRM: bootstrap cookie/machine groups and every modules `RegisterRoutes`;
   individual worker `RunOnce` before claim/side effect; Temporal activities too.
   Import preview persists jobs and is not historical read. Existing audit
@@ -61,8 +61,11 @@ delivery policy need explicit tests rather than a process-wide exemption.
 snapshots and SQL aggregation over existing facts are historical queries; the
 separate aggregation worker creates new projections and is business mutation.
 Contact-phone historical read requires its existing authorization and mandatory
-audit. Unsupported presale/filing exports stay explicitly unavailable; tagging
-the intended operation does not manufacture a working export.
+audit. Classifying an export does not manufacture a working exporter. CRM
+presale report export remains explicitly unavailable. Portal filing now has a
+PDF renderer wired into bootstrap; its actual state/permission/file checks are
+described in the [portal manual](../../sharedDocs/10_操作手册/客户自助门户操作手册.md),
+and must not be inferred solely from a historical classification entry.
 
 Executable `ESSENTIAL_SERVICE` applies **only to bootstrap/approved maintenance**,
 not every request or goroutine started by that process. Each route/activity/task
@@ -89,3 +92,17 @@ worker expiry behavior, installation approval and browser acceptance remain
 separate required evidence. Registered activity
 methods are additionally inventoried, but runtime registration and installation
 evidence remain separate gates, even after all source entries are classified.
+
+## Release operator procedure (2026-10-13)
+
+Source reviewers inspect handler bodies, service persistence, worker dispatch and side effects before updating classification. The commands above are available checks, not tests run in this documentation pass. Candidate generation rereads the fixed registry and invokes Scan/Check, then hashes the reviewed application source set; old digests after source changes cannot prove coverage.
+
+Successful classification is only a source gate. Release administrators separately verify actual images, deploy selected components, confirm current READY/ACK and validate business/expiry/offline behavior. Unknown/drifted entries require semantic review, not relabeling as essential. CRM presale report export remains unavailable even when classified EXPORT_HISTORY. Licensed production Contract runs split API/Worker; keep both alive during expiry.
+
+As of source review 2026-10-22, legacy V1 uses approved image/coverage digests for
+runtime enrollment; the built-in V2 directory uses stable component identity.
+This distinction does not remove the source review, release integrity or actual
+execution gates. The commands here were not rerun as business verification in
+this documentation update.
+
+Evidence: registry.go Scan/Check, reviewed.go, tasks.go → commercial-license-tool/cmd/runtime-approval/main.go → internal/runtimeapproval/approval.go CoverageDigest/Prepare. See the [approval guide](../../sharedDocs/09_商业授权/02_运行组件批准清单.md); runtime operation maps remain separate in each business repository.

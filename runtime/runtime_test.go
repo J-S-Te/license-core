@@ -126,7 +126,7 @@ func TestSnapshotStrictTrustAndBinding(t *testing.T) {
 		})
 	}
 	s.CurrentLicenseJWS = f.license(1, f.now.Unix()-100, f.now.Unix()+100, "settlement")
-	// A valid license omitting this app is a denial, not a signature error.
+	// 有效授权未包含当前应用时应拒绝操作，而非报告签名错误。
 	f.apply(s)
 	if err := f.r.Evaluate(context.Background(), core.MUTATE_BUSINESS, f.now); !errors.Is(err, core.ErrDenied) {
 		t.Fatal(err)
@@ -255,6 +255,101 @@ func TestWholePendingLicenseAndAbsoluteExpiry(t *testing.T) {
 	}
 }
 
+func TestImportedLicenseExpiryAcrossApplicationsAndEnforcementStates(t *testing.T) {
+	apps := []string{"customer_and_opportunity", "customer_portal", "contract_management", "project_management", "settlement", "data_analysis"}
+	for _, app := range apps {
+		for _, enforcement := range []EnforcementState{Pending, Applying, Enforced} {
+			t.Run(app+"/"+string(enforcement), func(t *testing.T) {
+				f := newFixture(t)
+				f.binding.Application = app
+				f.r = f.restart()
+				s := f.snapshot()
+				s.EnforcementState = enforcement
+				s.MigrationEligible = enforcement == Pending
+				s.CurrentLicenseJWS = f.license(1, f.now.Unix()-100, f.now.Unix()+10, app)
+				f.apply(s)
+				ctx := context.Background()
+				if err := f.r.Evaluate(ctx, core.MUTATE_BUSINESS, f.now.Add(9*time.Second)); err != nil {
+					t.Fatal("valid license denied", err)
+				}
+				// 后续不再投递快照：离线或进程重启后，
+				// 签名中的绝对到期时间仍须在边界时刻生效。
+				for _, seconds := range []int{10, 11} {
+					if err := f.r.Evaluate(ctx, core.MUTATE_BUSINESS, f.now.Add(time.Duration(seconds)*time.Second)); !errors.Is(err, core.ErrDenied) {
+						t.Fatalf("expired mutation at +%ds: %v", seconds, err)
+					}
+				}
+				f.r = f.restart()
+				if err := f.r.Evaluate(ctx, core.MUTATE_BUSINESS, f.now.Add(5*time.Second)); !errors.Is(err, core.ErrDenied) {
+					t.Fatal("clock jitter after restart reactivated expired license", err)
+				}
+				for _, op := range []core.Operation{core.READ_HISTORY, core.EXPORT_HISTORY, core.ESSENTIAL_SERVICE} {
+					if err := f.r.Evaluate(ctx, op, f.now.Add(12*time.Second)); err != nil {
+						t.Fatalf("expired permitted operation %s: %v", op, err)
+					}
+				}
+				// 签名正确的较高版本应恢复写入，
+				// 无需重置授权执行状态或持久化的时钟高水位。
+				s.Revision++
+				s.HighestLicenseVersion = 2
+				s.CurrentLicenseJWS = f.license(2, f.now.Unix()+100, f.now.Unix()+500, app)
+				s.SnapshotIssuedAt = f.now.Unix() + 120
+				if err := f.r.ApplySnapshot(ctx, f.sign(s), f.now.Add(120*time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.r.Evaluate(ctx, core.MUTATE_BUSINESS, f.now.Add(120*time.Second)); err != nil {
+					t.Fatal("valid renewal did not restore writes", err)
+				}
+			})
+		}
+	}
+}
+
+func TestMigrationCompatibilityOnlyBeforeAnyImportedLicense(t *testing.T) {
+	for _, scenario := range []string{"never-imported", "version-without-artifact", "future-only", "application-removed", "future-replacement-removes-application"} {
+		t.Run(scenario, func(t *testing.T) {
+			f := newFixture(t)
+			s := f.snapshot()
+			s.EnforcementState = Pending
+			s.MigrationEligible = true
+			at := f.now
+			wantAllowed := false
+			switch scenario {
+			case "never-imported":
+				s.CurrentLicenseJWS = ""
+				s.HighestLicenseVersion = 0
+				wantAllowed = true
+			case "version-without-artifact":
+				s.CurrentLicenseJWS = ""
+			case "future-only":
+				s.CurrentLicenseJWS = ""
+				s.PendingLicenseJWS = f.license(1, f.now.Unix()+100, f.now.Unix()+200, f.binding.Application)
+			case "application-removed":
+				s.CurrentLicenseJWS = f.license(1, f.now.Unix()-100, f.now.Unix()+200, "settlement")
+			case "future-replacement-removes-application":
+				s.PendingLicenseJWS = f.license(2, f.now.Unix()+100, f.now.Unix()+200, "settlement")
+				s.HighestLicenseVersion = 2
+				at = f.now.Add(100 * time.Second)
+			}
+			f.apply(s)
+			ctx := context.Background()
+			err := f.r.Evaluate(ctx, core.MUTATE_BUSINESS, at)
+			if wantAllowed && err != nil || !wantAllowed && !errors.Is(err, core.ErrDenied) {
+				t.Fatalf("migration write allowed=%v: %v", wantAllowed, err)
+			}
+			if scenario != "never-imported" {
+				s.Revision++
+				s.CurrentLicenseJWS = ""
+				s.PendingLicenseJWS = ""
+				s.HighestLicenseVersion = 0
+				if err := f.r.ApplySnapshot(ctx, f.sign(s), at); !errors.Is(err, ErrRollback) {
+					t.Fatal("imported version was reset to migration compatibility", err)
+				}
+			}
+		})
+	}
+}
+
 func TestVersionAndRevisionRollback(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
@@ -358,8 +453,8 @@ func TestConcurrentIndependentRuntimes(t *testing.T) {
 	}
 }
 
-// A real child process validates that flock, serialization and key trust survive
-// process boundaries; parent Go object locks are insufficient for this test.
+// 使用真实子进程验证文件锁、序列化与密钥信任可跨进程生效；
+// 仅依赖父进程内的 Go 对象锁不足以完成此测试。
 func TestProcessRestart(t *testing.T) {
 	if os.Getenv("LICENSE_RUNTIME_CHILD") == "1" {
 		var s struct {
@@ -491,7 +586,7 @@ func TestSnapshotValidationAndImmutableTrust(t *testing.T) {
 	}
 	s = f.snapshot()
 	f.apply(s)
-	// The constructor owns independent key bytes and maps.
+	// 构造函数应持有独立的密钥字节与映射副本。
 	f.platformKeys["platform"][0] ^= 1
 	f.vendorKeys["vendor"][0] ^= 1
 	delete(f.platformKeys, "platform")

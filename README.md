@@ -71,8 +71,26 @@ same protocol bounds. Validation requires a trusted current time: a compromised
 local clock cannot itself establish recovery eligibility.
 
 The core does not consume recovery IDs, lower or reset a persistent high-water
-mark, or implement replay prevention. A future platform transaction must verify
+mark, or implement replay prevention. A platform integration must verify
 both signatures, validate binding/time, reject an already consumed recovery ID,
 persist consumption and apply the authorized anchor atomically, with audit and
 appropriate exclusive access. Calling VerifyRecovery or ValidateRecovery alone
 does not perform recovery or prevent replay.
+
+## Operator interpretation, checked 2026-10-13
+
+Current registration note (source checked 2026-10-22): `catalog` defines the
+built-in component directory (version `1`) and registration V2 (`2`), including
+V1 bridging. Those numbers do not change the commercial JWS protocol or the
+signed snapshot protocol, which remain `1`. See the [runtime synchronization
+client](syncclient/README.md) and [current operator guide](../sharedDocs/09_商业授权/README.md)
+for registration, update and trust boundaries. The commands above are validation
+entry points, not tests rerun by this documentation-only update.
+
+Platform operators should follow the [commercial license guide](../sharedDocs/09_商业授权/README.md). Current business callers explicitly wire consumer/syncclient/runtime in reviewed mirrors; importing this library alone does not install a gate.
+
+There is no extra mutation grace period. Expiry permits history/export only when the verified bound application remains present and effective. Removed, future, missing or corrupt state gets no historical entitlement. FULL/TRIAL share this rule. Pending activation replaces the whole license, including removals.
+
+Request fields are customer_id and instance_id, not deployment_id; commercial production differs from OAuth prod. Verify proves signature/schema, not live binding, ACK or business acceptance. Use higher versions for renewal. Platform already implements transactional recovery consumption; the root library alone does not. Normal consumer synchronization does not call local RecoverClock.
+
+Evidence: license.go Evaluate/CompareVersions → runtime/state.go verified selection → consumer/consumer.go explicit bootstrap; Platform license/application/service.go → license/infrastructure/gorm_repository.go and migration116 persist/audit changes. This documentation pass did not run validation commands or verify a deployment.
