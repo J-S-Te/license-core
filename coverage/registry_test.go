@@ -159,3 +159,43 @@ func main() {
 		t.Fatalf("removed reviewed effects dispatch not rejected: %v", err)
 	}
 }
+
+func TestProjectBackgroundWrapperKeepsFiniteTaskReview(t *testing.T) {
+	root := t.TempDir()
+	source := "project_management/cmd/sla-notifier/main.go"
+	activity := "project_management/internal/background/activities.go"
+	for _, path := range []string{source, activity} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, path)), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, where := range []string{"", "wrapper", "activity"} {
+		wrapper := "package main\nimport \"github.com/j-s-te/project-management/internal/background\"\nfunc main(){background.Run(ctx,logger,cfg); WRAPPER }"
+		impl := "package background\nfunc run(){service.ScanSlaNotifications(ctx);service.DispatchDeliveryEffects(ctx);service.DispatchNotificationOutbox(ctx); ACTIVITY }"
+		extra := "unknown.RunOnce(ctx)"
+		wrapper = strings.ReplaceAll(wrapper, "WRAPPER", map[bool]string{true: extra}[where == "wrapper"])
+		impl = strings.ReplaceAll(impl, "ACTIVITY", map[bool]string{true: extra}[where == "activity"])
+		for path, code := range map[string]string{source: wrapper, activity: impl} {
+			if err := os.WriteFile(filepath.Join(root, path), []byte(code), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		r := Registry{SourceDigests: map[string]string{}}
+		if err := discoverMixedTasks(root, &r, Entry{ID: "project-runtime", Application: "project_management", Source: source, Operation: "MIXED_EXECUTION"}); err != nil {
+			t.Fatal(err)
+		}
+		if r.SourceDigests[source] == "" || r.SourceDigests[activity] == "" {
+			t.Fatal("wrapper and implementation fingerprints are required")
+		}
+		want := 0
+		if where != "" {
+			want = 1
+		}
+		if len(r.Entries) != want {
+			t.Fatalf("%s: entries=%+v", where, r.Entries)
+		}
+		if want == 1 && r.Entries[0].Operation != "UNCLASSIFIED" {
+			t.Fatal("unknown task inherited reviewed policy")
+		}
+	}
+}
