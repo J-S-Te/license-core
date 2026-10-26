@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // 有限策略审核任务执行行为，不审核可执行程序的传输或存活机制。
@@ -120,9 +121,37 @@ func discoverMixedTasks(root string, r *Registry, parent Entry) error {
 	if err != nil {
 		return err
 	}
+	// The project compatibility binary now delegates to the shared background
+	// runtime. Inspect both the wrapper and the concrete Activity task calls;
+	// unknown Run/RunOnce calls in either file remain unclassified.
+	projectRuntime := false
+	if parent.Application == "project_management" && source == "project_management/cmd/sla-notifier/main.go" && strings.Contains(string(raw), "background.Run(") {
+		for _, imp := range f.Imports {
+			if imp.Path.Value == `"github.com/j-s-te/project-management/internal/background"` {
+				projectRuntime = true
+			}
+		}
+		if projectRuntime {
+			activitySource := "project_management/internal/background/activities.go"
+			activityRaw, err := os.ReadFile(filepath.Join(root, activitySource))
+			if err != nil {
+				return err
+			}
+			activitySum := sha256.Sum256(activityRaw)
+			r.SourceDigests[activitySource] = hex.EncodeToString(activitySum[:])
+			activityFile, err := parser.ParseFile(fs, activitySource, activityRaw, 0)
+			if err != nil {
+				return err
+			}
+			f.Decls = append(f.Decls, activityFile.Decls...)
+		}
+	}
 	knownCalls := map[string]bool{"scanner.RunOnce": true, "taxReconciler.RunOnce": true, "exporter.RunOnce": true, "worker.Run": true, "commercialGate.Run": true, "creditWorker.RunOnce": true}
 	if parent.Application == "project_management" {
 		knownCalls = map[string]bool{"service.ScanSlaNotifications": true, "service.DispatchDeliveryEffects": true, "service.DispatchNotificationOutbox": true}
+		if projectRuntime {
+			knownCalls["background.Run"] = true
+		}
 	}
 	knownDest := map[string]bool{"PLATFORM_AUDIT": true, "PLATFORM_NOTIFICATION": true, "TAX_INVOICE_COMMAND": true}
 	seenCalls, seenDest := map[string]bool{}, map[string]bool{}
