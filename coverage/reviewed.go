@@ -64,7 +64,13 @@ var semanticGroups = map[string]map[string]string{
 	},
 }
 
+// semanticClassify 应用经审核的精确来源和处理器策略，不按HTTP方法放行。
+// 参数：e 为待分类条目；handler 为实际处理器表达式。
+// 返回值：无；未匹配的条目保留原分类。
 func semanticClassify(e *Entry, handler string) {
+	if review20261028Classify(e, handler) {
+		return
+	}
 	if upgradeSemanticClassify(e, handler) {
 		return
 	}

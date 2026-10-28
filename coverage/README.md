@@ -37,9 +37,11 @@ Known attachment boundaries:
   groups; report generation/request is business, existing report download grant
   and consumption are export. Project export worker is historical export.
 - Project: HTTP/application service checks; SLA notifier scan is business,
-  dispatcher requires destination/message-purpose review. Empty Temporal poller
-  has no business activities today, not proof no old cluster tasks exist.
-- Settlement: explicit `ServeHTTP` dispatch predicates plus services;
+  dispatcher requires destination/message-purpose review. Worker and notifier
+  now use the shared background runtime and remain mixed execution; the finite
+  taskKinds and named activity policies are checked separately.
+- Settlement: explicit `ServeHTTP` and reviewed role helper dispatch predicates
+  plus finite method/path policies and services;
   task-level split inside the worker. Report export and its job bookkeeping stay
   available for licensed history mode; dunning/tax reconcile/new tax commands
   pause before claim. PLATFORM_AUDIT delivery remains independent.
@@ -106,3 +108,21 @@ execution gates. The commands here were not rerun as business verification in
 this documentation update.
 
 Evidence: registry.go Scan/Check, reviewed.go, tasks.go → commercial-license-tool/cmd/runtime-approval/main.go → internal/runtimeapproval/approval.go CoverageDigest/Prepare. See the [approval guide](../../sharedDocs/09_商业授权/02_运行组件批准清单.md); runtime operation maps remain separate in each business repository.
+
+## Source review 2026-10-28
+
+The reviewed registry contains 673 source boundaries and 218 source digests.
+The deleted Settlement operations.go was traced to its real service split,
+without restoring a placeholder. Role helper routing keeps separate read/write/
+export policies, and the new recovery/reminder tasks remain business mutation.
+Project background activity registration with options and its real taskKinds
+are included; unknown members and changed handlers cannot inherit reviewed
+policies. The gate comparison itself is unchanged.
+
+Audit evidence and local regression results are maintained in
+`.ai/qa/source-registry-review-20261028/`. These source classifications do not
+certify runtime operation mappings: CRM notification projection currently uses
+a looser runtime operation, while Portal validation and project notification
+execution are stricter than their semantic classifications. Settlement's project
+reference client wiring also needs separate business validation. Those business
+changes were not made in this source-registry task.

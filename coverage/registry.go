@@ -37,7 +37,7 @@ type Registry struct {
 var files = map[string][]string{
 	"contract_management":      {"contract_management/internal/transport/httpapi/router.go", "contract_management/internal/transport/httpapi/handover.go"},
 	"project_management":       {"project_management/internal/httpapi/api.go"},
-	"settlement":               {"Settlement/internal/httpapi/api.go"},
+	"settlement":               {"Settlement/internal/httpapi/api.go", "Settlement/internal/httpapi/role_finance.go", "Settlement/internal/httpapi/role_collaboration.go"},
 	"data_analysis":            {"data_analysis/internal/bootstrap/app.go"},
 	"customer_portal":          {"customer_and_opportunity/internal/portalbootstrap/router.go"},
 	"customer_and_opportunity": {"customer_and_opportunity/internal/bootstrap/app.go", "customer_and_opportunity/internal/modules/handover/handler.go"},
@@ -51,8 +51,9 @@ func expression(f *token.FileSet, n ast.Node) string {
 	return b.String()
 }
 
-// Scan 统计源码中的注册表达式，不统计展开后的实际路由。
-// 循环、条件功能与接收器分组仍须通过运行时测试确认。
+// Scan 盘点真实注册、有限分派和任务边界，不宣称等同运行路由分母。
+// 参数：root 为受审核的工作区根目录。
+// 返回值：确定性清单；源码缺失、解析或任务一致性异常时返回错误。
 func Scan(root string) (Registry, error) {
 	r := Registry{Schema: 1, Scope: "source-registration-expressions; not live route denominator", SourceDigests: map[string]string{}}
 	inputs := map[string][]string{}
@@ -124,48 +125,8 @@ func Scan(root string) (Registry, error) {
 				r.Entries = append(r.Entries, e)
 				return true
 			})
-			// Settlement 直接分派请求，不通过 Gin 路由注册。
 			if app == "settlement" {
-				for _, decl := range f.Decls {
-					fn, ok := decl.(*ast.FuncDecl)
-					if !ok || fn.Name.Name != "ServeHTTP" {
-						continue
-					}
-					ast.Inspect(fn.Body, func(n ast.Node) bool {
-						cl, ok := n.(*ast.CaseClause)
-						if !ok {
-							return true
-						}
-						for _, cond := range cl.List {
-							ordinal++
-							e := Entry{ID: fmt.Sprintf("%s:%s:%03d", app, rel, ordinal), Application: app, Source: rel, Kind: "http-dispatch", Registration: expression(fset, cond), Operation: "UNCLASSIFIED", Reason: "Dispatch predicate requires explicit semantic classification; not a method-wide policy"}
-							for _, statement := range cl.Body {
-								ast.Inspect(statement, func(n ast.Node) bool {
-									c, ok := n.(*ast.CallExpr)
-									if !ok {
-										return true
-									}
-									s, ok := c.Fun.(*ast.SelectorExpr)
-									if !ok {
-										return true
-									}
-									if expression(fset, s.X) == "a" {
-										semanticClassify(&e, "a."+s.Sel.Name)
-									}
-									return true
-								})
-							}
-							for _, exact := range []string{`r.URL.Path == "/healthz"`, `r.URL.Path == "/readyz"`, `r.URL.Path == "/auth/callback"`, `r.URL.Path == "/auth/logout"`, `r.URL.Path == "/auth/local-logout" && r.Method == http.MethodPost`, `r.URL.Path == "/auth/backchannel-logout" && r.Method == http.MethodPost`, `r.URL.Path == "/logged-out"`} {
-								if e.Registration == exact {
-									e.Operation = "ESSENTIAL_SERVICE"
-									e.Reason = "Exact health or auth/session dispatch predicate"
-								}
-							}
-							r.Entries = append(r.Entries, e)
-						}
-						return true
-					})
-				}
+				r.Entries = append(r.Entries, settlementDispatchEntries(fset, f, rel, ordinal)...)
 			}
 		}
 	}
@@ -174,7 +135,7 @@ func Scan(root string) (Registry, error) {
 	taskFiles := map[string][]string{
 		"contract_management":      {"contract_management/internal/workflows/register.go", "contract_management/internal/workflows/activities.go"},
 		"customer_and_opportunity": {"customer_and_opportunity/internal/presaleworkflow/types.go"},
-		"project_management":       {"project_management/internal/application/delivery.go", "project_management/internal/application/delivery_effects.go"},
+		"project_management":       {"project_management/internal/application/delivery.go", "project_management/internal/application/delivery_effects.go", "project_management/internal/application/delivery_outbox.go", "project_management/internal/background/activities.go", "project_management/internal/background/runtime.go"},
 		"settlement":               {"Settlement/internal/reportexport/worker.go", "Settlement/internal/outbox/worker.go", "Settlement/internal/dunning/scanner.go", "Settlement/internal/taxreconcile/worker.go"},
 		"data_analysis":            {"data_analysis/internal/aggregation/worker.go", "data_analysis/internal/aggregation/aggregation.go", "data_analysis/internal/alertworker/worker.go"},
 	}
@@ -191,28 +152,8 @@ func Scan(root string) (Registry, error) {
 			if err != nil {
 				return r, err
 			}
-			ordinal := 0
-			ast.Inspect(f, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-				if sel.Sel.Name != "RegisterWorkflowWithOptions" && sel.Sel.Name != "RegisterActivity" {
-					return true
-				}
-				ordinal++
-				op := "MUTATE_BUSINESS"
-				reason := "Approval/status/archive/worklog workflow is new business; check each activity execution before side effects"
-				if sel.Sel.Name == "RegisterActivity" {
-					reason = "Registered approval/worklog activity struct contains business side effects; individual activity registration comparison remains required"
-				}
-				r.Entries = append(r.Entries, Entry{ID: fmt.Sprintf("%s:%s:temporal:%03d", app, rel, ordinal), Application: app, Source: rel, Kind: "temporal-registration", Registration: expression(fset, call), Operation: op, Reason: reason})
-				return true
-			})
+			r.Entries = append(r.Entries, temporalRegistrationEntries(fset, f, app, rel)...)
+
 			for _, decl := range f.Decls {
 				fn, ok := decl.(*ast.FuncDecl)
 				if !ok {
@@ -287,6 +228,10 @@ func Scan(root string) (Registry, error) {
 			if name == "portal-access-disable-worker" {
 				e.Operation = "ESSENTIAL_SERVICE"
 				e.Reason = "Only processes existing security revocation/disable tasks, not account provisioning"
+			}
+			if app == "project_management" && rel == "project_management/cmd/background-control/main.go" {
+				e.Operation = "ESSENTIAL_SERVICE"
+				e.Reason = "Reviewed private-socket maintenance only: inspect/pause/drain/ensure/restore/resume/verify; no trigger/backfill/business execution; resumed activities remain separately licensed"
 			}
 			if app == "data_analysis" && name == "sync-job-recover-legacy" {
 				e.Operation = "ESSENTIAL_SERVICE"
