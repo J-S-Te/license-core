@@ -118,8 +118,12 @@ var executionSources = []string{
 	"Settlement/internal/creditclient/client.go",
 }
 
+// fingerprintExecutionSources 绑定经逐项审核的注册外实现及拆分文件。
+// 参数：root 为工作区；r 为清单。
+// 返回值：任何已审核实现缺失或不可读时返回错误。
 func fingerprintExecutionSources(root string, r *Registry) error {
-	for _, source := range executionSources {
+	sources := append(append([]string{}, executionSources...), reviewedExecutionSources20261028...)
+	for _, source := range sources {
 		raw, err := os.ReadFile(filepath.Join(root, source))
 		if err != nil {
 			return err

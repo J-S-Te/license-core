@@ -15,6 +15,9 @@ import (
 
 // 有限策略审核任务执行行为，不审核可执行程序的传输或存活机制。
 // 实现文件独立于命令包装层计算指纹。
+// reviewRemainingTasks 核对有限任务的实际定义及调度，不整进程豁免。
+// 参数：root 为工作区；r 为待补充的源码清单。
+// 返回值：任务缺失、解析或调度漂移时返回错误。
 func reviewRemainingTasks(root string, r *Registry) error {
 	commands := map[string]string{
 		"notification-delivery-worker":           "ESSENTIAL_SERVICE",
@@ -30,9 +33,13 @@ func reviewRemainingTasks(root string, r *Registry) error {
 				e.Reason = "Reviewed task implementation below: existing notification delivery is retained; creating notification projections requires business entitlement"
 			}
 		}
-		if e.Kind == "executable" && ((e.Application == "settlement" && e.Registration == "worker") || (e.Application == "project_management" && e.Registration == "sla-notifier")) {
+		if e.Kind == "executable" && ((e.Application == "settlement" && e.Registration == "worker") || (e.Application == "project_management" && (e.Registration == "sla-notifier" || e.Registration == "worker"))) {
 			e.Operation = "MIXED_EXECUTION"
 			e.Reason = "Task-level policies required; this process must remain running for historical exports and existing delivery"
+		}
+		if e.Application == "project_management" && e.Source == "project_management/internal/background/activities.go" && e.Kind == "activity-method" && e.Registration == "*Activities.RunOne" {
+			e.Operation = "MIXED_EXECUTION"
+			e.Reason = "Reviewed RunOne dispatches sla/effects/notifications with finite task policies; current runtime is stricter and still checks business entitlement for notifications"
 		}
 	}
 	type task struct{ app, source, name, op, reason string }
@@ -48,6 +55,16 @@ func reviewRemainingTasks(root string, r *Registry) error {
 		{"customer_and_opportunity", "customer_and_opportunity/internal/shared/requestaudit/dispatcher.go", "Run", "ESSENTIAL_SERVICE", "Deliver only persisted request audit events; no new business intents"},
 		{"settlement", "Settlement/internal/service/credit_sync_worker.go", "RunOnce", "MUTATE_BUSINESS", "Claim and publish credit business events; recheck before claim and each external side effect; retain paused leases"},
 	}
+	tasks = append(tasks,
+		task{"settlement", "Settlement/internal/service/invoice_archive.go", "RunOnce", "MUTATE_BUSINESS", "Reconcile invoice upload/binding intents and write recovery state; business checks remain required"},
+		task{"settlement", "Settlement/internal/service/receipt_archive.go", "RunOnce", "MUTATE_BUSINESS", "Reconcile receipt upload/binding intents and write recovery state; not immutable audit delivery"},
+		task{"settlement", "Settlement/internal/dunning/role_reminder.go", "RunOnce", "MUTATE_BUSINESS", "Generate responsibility-based dunning actions and new notifications; never an essential delivery exemption"},
+		task{"data_analysis", "data_analysis/internal/aggregation/queue_lease.go", "runLeasedQueue", "MUTATE_BUSINESS", "Claim queued aggregation and create new projections, not a historical data query"},
+		task{"data_analysis", "data_analysis/internal/aggregation/apisync.go", "SyncContractDashboard", "MUTATE_BUSINESS", "Fetch upstream facts and insert a new API contract dashboard snapshot"},
+		task{"data_analysis", "data_analysis/internal/aggregation/apisync.go", "SyncProjectDashboard", "MUTATE_BUSINESS", "Fetch upstream facts and insert a new API project dashboard snapshot"},
+		task{"data_analysis", "data_analysis/internal/aggregation/project.go", "publishProjectProjection", "MUTATE_BUSINESS", "Publish a new dim_project projection and publication state"},
+		task{"contract_management", "contract_management/internal/integration/settlement/client.go", "dispatchOne", "MUTATE_BUSINESS", "Claim and post contract responsibility facts to Settlement, not essential immutable audit delivery"},
+	)
 	for _, t := range tasks {
 		raw, err := os.ReadFile(filepath.Join(root, t.source))
 		if err != nil {
@@ -75,7 +92,7 @@ func reviewRemainingTasks(root string, r *Registry) error {
 	// 任务所在文件与命令包装层分别计算指纹。
 	parents := append([]Entry(nil), r.Entries...)
 	for _, e := range parents {
-		if e.Operation != "MIXED_EXECUTION" {
+		if e.Operation != "MIXED_EXECUTION" || e.Kind == "http-dispatch" {
 			continue
 		}
 		policies := map[string]string{}
@@ -84,6 +101,9 @@ func reviewRemainingTasks(root string, r *Registry) error {
 			// 仅此处精确匹配的授权消费端同步器属于必要任务。
 			// 即使在同一进程内，其他 Run 接收器仍须审核。
 			policies["commercialGate.Run"] = "ESSENTIAL_SERVICE"
+			policies["archiveRecovery.RunOnce"] = "MUTATE_BUSINESS"
+			policies["receiptRecovery.RunOnce"] = "MUTATE_BUSINESS"
+			policies["roleReminder.RunOnce"] = "MUTATE_BUSINESS"
 			if e.Kind == "executable" {
 				policies["service.CreditSyncWorker.RunOnce"] = "MUTATE_BUSINESS"
 				policies["dunning.Scanner.RunOnce"] = "MUTATE_BUSINESS"
@@ -96,6 +116,14 @@ func reviewRemainingTasks(root string, r *Registry) error {
 		for name, op := range policies {
 			r.Entries = append(r.Entries, Entry{ID: e.ID + ":policy:" + name, Application: e.Application, Source: e.Source, Kind: "task-policy", Registration: name, Operation: op, Reason: "Finite reviewed execution policy; gate before task claim and side effect, never extrapolate to unknown tasks/destinations"})
 		}
+		if e.Application == "project_management" {
+			if err := reviewProjectBackgroundKinds(root, r, e); err != nil {
+				return err
+			}
+			if e.Kind == "temporal-registration" {
+				continue
+			}
+		}
 		if err := discoverMixedTasks(root, r, e); err != nil {
 			return err
 		}
@@ -103,8 +131,9 @@ func reviewRemainingTasks(root string, r *Registry) error {
 	return nil
 }
 
-// 将实际调度声明及调用与已审核的有限集合核对。
-// 新增的 RunOnce 调用或目标不得继承混合职责进程的豁免。
+// discoverMixedTasks 将实际调度与有限集合核对，未知调用保持未分类。
+// 参数：root 为工作区；r 为清单；parent 为混合执行边界。
+// 返回值：已审核调用被移除、源码不可读或解析异常时返回错误。
 func discoverMixedTasks(root string, r *Registry, parent Entry) error {
 	source := parent.Source
 	if parent.Application == "settlement" {
@@ -125,7 +154,7 @@ func discoverMixedTasks(root string, r *Registry, parent Entry) error {
 	// runtime. Inspect both the wrapper and the concrete Activity task calls;
 	// unknown Run/RunOnce calls in either file remain unclassified.
 	projectRuntime := false
-	if parent.Application == "project_management" && source == "project_management/cmd/sla-notifier/main.go" && strings.Contains(string(raw), "background.Run(") {
+	if parent.Application == "project_management" && (source == "project_management/cmd/sla-notifier/main.go" || source == "project_management/cmd/worker/main.go") && strings.Contains(string(raw), "background.Run(") {
 		for _, imp := range f.Imports {
 			if imp.Path.Value == `"github.com/j-s-te/project-management/internal/background"` {
 				projectRuntime = true
@@ -154,6 +183,10 @@ func discoverMixedTasks(root string, r *Registry, parent Entry) error {
 		}
 	}
 	knownDest := map[string]bool{"PLATFORM_AUDIT": true, "PLATFORM_NOTIFICATION": true, "TAX_INVOICE_COMMAND": true}
+	additionalCalls := map[string]bool{}
+	if parent.Application == "settlement" {
+		additionalCalls = map[string]bool{"archiveRecovery.RunOnce": true, "receiptRecovery.RunOnce": true, "roleReminder.RunOnce": true}
+	}
 	seenCalls, seenDest := map[string]bool{}, map[string]bool{}
 	unknown := func(name string) {
 		r.Entries = append(r.Entries, Entry{ID: parent.ID + ":discovered:" + name, Application: parent.Application, Source: source, Kind: "task-policy", Registration: name, Operation: "UNCLASSIFIED", Reason: "Actual mixed dispatch not present in finite reviewed task policy"})
@@ -163,7 +196,7 @@ func discoverMixedTasks(root string, r *Registry, parent Entry) error {
 			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && (sel.Sel.Name == "RunOnce" || sel.Sel.Name == "ScanSlaNotifications" || sel.Sel.Name == "DispatchNotificationOutbox" || sel.Sel.Name == "DispatchDeliveryEffects" || sel.Sel.Name == "Run") {
 				name := expression(fs, sel)
 				seenCalls[name] = true
-				if !knownCalls[name] {
+				if !knownCalls[name] && !additionalCalls[name] {
 					unknown(name)
 				}
 			}
