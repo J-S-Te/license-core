@@ -126,3 +126,20 @@ a looser runtime operation, while Portal validation and project notification
 execution are stricter than their semantic classifications. Settlement's project
 reference client wiring also needs separate business validation. Those business
 changes were not made in this source-registry task.
+
+## Source review 2026-11-02
+
+The current reviewed inventory contains 713 source boundaries and 307 source
+digests. Review evidence is in `.ai/qa/push-local-20261102/`. New routes and tasks
+use exact source/registration policies; the gate comparison remains unchanged.
+
+Settlement destination discovery follows the actual imported constructor and
+fingerprints its implementation. Shadowed identifiers, dynamic destinations and
+helper tasks cannot inherit the entry point's policies. Exported `Activities`
+methods are discovered across the three registered packages; private methods
+are excluded, and unknown methods remain unclassified. The read-only number
+audit and the business-mutating historical import confirmation are separately
+reviewed. Refund confirmation also has an explicit business-write child policy.
+
+This source review does not change stricter historical-read runtime mappings,
+authorize a release signature or certify live routes, activities or deployment.

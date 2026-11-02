@@ -123,6 +123,7 @@ var executionSources = []string{
 // 返回值：任何已审核实现缺失或不可读时返回错误。
 func fingerprintExecutionSources(root string, r *Registry) error {
 	sources := append(append([]string{}, executionSources...), reviewedExecutionSources20261028...)
+	sources = append(sources, reviewedExecutionSources20261102...)
 	for _, source := range sources {
 		raw, err := os.ReadFile(filepath.Join(root, source))
 		if err != nil {

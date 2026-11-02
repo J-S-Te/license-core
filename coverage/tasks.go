@@ -187,39 +187,59 @@ func discoverMixedTasks(root string, r *Registry, parent Entry) error {
 	if parent.Application == "settlement" {
 		additionalCalls = map[string]bool{"archiveRecovery.RunOnce": true, "receiptRecovery.RunOnce": true, "roleReminder.RunOnce": true}
 	}
-	seenCalls, seenDest := map[string]bool{}, map[string]bool{}
-	unknown := func(name string) {
-		r.Entries = append(r.Entries, Entry{ID: parent.ID + ":discovered:" + name, Application: parent.Application, Source: source, Kind: "task-policy", Registration: name, Operation: "UNCLASSIFIED", Reason: "Actual mixed dispatch not present in finite reviewed task policy"})
+	inputs := []mixedTaskInput{{source: source, node: f, destinationType: "outbox.Destination"}}
+	if parent.Application == "settlement" {
+		helper, err := settlementDestinationInput(root, r, fs, f)
+		if err != nil {
+			return err
+		}
+		if helper != nil {
+			inputs = append(inputs, *helper)
+		}
 	}
-	ast.Inspect(f, func(n ast.Node) bool {
-		if call, ok := n.(*ast.CallExpr); ok {
-			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && (sel.Sel.Name == "RunOnce" || sel.Sel.Name == "ScanSlaNotifications" || sel.Sel.Name == "DispatchNotificationOutbox" || sel.Sel.Name == "DispatchDeliveryEffects" || sel.Sel.Name == "Run") {
-				name := expression(fs, sel)
-				seenCalls[name] = true
-				if !knownCalls[name] && !additionalCalls[name] {
-					unknown(name)
+	seenCalls, seenDest := map[string]bool{}, map[string]bool{}
+	for _, input := range inputs {
+		unknown := func(name string) {
+			r.Entries = append(r.Entries, Entry{ID: parent.ID + ":discovered:" + name, Application: parent.Application, Source: input.source, Kind: "task-policy", Registration: name, Operation: "UNCLASSIFIED", Reason: "Actual mixed dispatch not present in finite reviewed task policy"})
+		}
+		ast.Inspect(input.node, func(n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); ok {
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && (sel.Sel.Name == "RunOnce" || sel.Sel.Name == "ScanSlaNotifications" || sel.Sel.Name == "DispatchNotificationOutbox" || sel.Sel.Name == "DispatchDeliveryEffects" || sel.Sel.Name == "Run") {
+					name := expression(fs, sel)
+					if input.source == source {
+						seenCalls[name] = true
+					}
+					if input.source != source || (!knownCalls[name] && !additionalCalls[name]) {
+						unknown(name)
+					}
 				}
 			}
-		}
-		if lit, ok := n.(*ast.CompositeLit); ok && expression(fs, lit.Type) == "outbox.Destination" {
-			for _, element := range lit.Elts {
-				kv, ok := element.(*ast.KeyValueExpr)
-				if !ok || expression(fs, kv.Key) != "Name" {
-					continue
-				}
-				name, err := strconv.Unquote(expression(fs, kv.Value))
-				if err != nil {
-					unknown("dynamic-destination")
-					continue
-				}
-				seenDest[name] = true
-				if !knownDest[name] {
-					unknown(name)
+			if lit, ok := n.(*ast.CompositeLit); ok && expression(fs, lit.Type) == input.destinationType {
+				for _, element := range lit.Elts {
+					kv, ok := element.(*ast.KeyValueExpr)
+					if !ok || expression(fs, kv.Key) != "Name" {
+						continue
+					}
+					name, err := strconv.Unquote(expression(fs, kv.Value))
+					if err != nil {
+						var resolved bool
+						if identifier, ok := kv.Value.(*ast.Ident); ok && identifier.Obj != nil {
+							name, resolved = input.constantNames[identifier.Obj]
+						}
+						if !resolved {
+							unknown("dynamic-destination")
+							continue
+						}
+					}
+					seenDest[name] = true
+					if !knownDest[name] {
+						unknown(name)
+					}
 				}
 			}
-		}
-		return true
-	})
+			return true
+		})
+	}
 	for name := range knownCalls {
 		if !seenCalls[name] {
 			return fmt.Errorf("reviewed mixed task removed: %s %s", source, name)

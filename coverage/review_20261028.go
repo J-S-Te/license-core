@@ -23,6 +23,7 @@ var reviewedDispatch20261028 = map[string][]dispatchPolicy{
 		{"POST /api/v1/receipt-differences", "MUTATE_BUSINESS", "幂等创建差异并暂挂实际余额。"},
 		{"POST /api/v1/receipt-differences/:id/resolve", "MUTATE_BUSINESS", "版本化提交差异处置。"},
 		{"POST /api/v1/receipt-differences/:id/approve", "MUTATE_BUSINESS", "difference.approve与独立复核后写实际财务事实。"},
+		{"POST /api/v1/receipt-differences/:id/confirm-refund", "MUTATE_BUSINESS", "回录退款完成、凭证与处理人并审计；属于业务事实写入。"},
 	},
 	"Settlement/internal/httpapi/role_finance.go|path == \"accounting-vouchers\" || strings.HasPrefix(path, \"accounting-vouchers/\")": {
 		{"GET /api/v1/accounting-vouchers", "READ_HISTORY", "读取已有凭证状态，voucher.manage及全范围，最多200。"},

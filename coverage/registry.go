@@ -139,6 +139,9 @@ func Scan(root string) (Registry, error) {
 		"settlement":               {"Settlement/internal/reportexport/worker.go", "Settlement/internal/outbox/worker.go", "Settlement/internal/dunning/scanner.go", "Settlement/internal/taxreconcile/worker.go"},
 		"data_analysis":            {"data_analysis/internal/aggregation/worker.go", "data_analysis/internal/aggregation/aggregation.go", "data_analysis/internal/alertworker/worker.go"},
 	}
+	if err := appendSplitActivitySources(root, taskFiles); err != nil {
+		return r, err
+	}
 	for app, list := range taskFiles {
 		for _, rel := range list {
 			raw, err := os.ReadFile(filepath.Join(root, rel))
@@ -153,6 +156,7 @@ func Scan(root string) (Registry, error) {
 				return r, err
 			}
 			r.Entries = append(r.Entries, temporalRegistrationEntries(fset, f, app, rel)...)
+			r.Entries = append(r.Entries, activityMethodEntries(fset, f, app, rel)...)
 
 			for _, decl := range f.Decls {
 				fn, ok := decl.(*ast.FuncDecl)
@@ -160,9 +164,6 @@ func Scan(root string) (Registry, error) {
 					continue
 				}
 				name := fn.Name.Name
-				if fn.Recv != nil && len(fn.Recv.List) > 0 && expression(fset, fn.Recv.List[0].Type) == "*Activities" {
-					r.Entries = append(r.Entries, Entry{ID: app + ":" + rel + ":activity:" + name, Application: app, Source: rel, Kind: "activity-method", Registration: "*Activities." + name, Operation: "MUTATE_BUSINESS", Reason: "Exported registered activity delegates approval, status/archive, notification generation or worklog publication persistence; check before side effects"})
-				}
 				if name != "RunOnce" && name != "ScanSlaNotifications" && name != "DispatchNotificationOutbox" && name != "DispatchDeliveryEffects" {
 					continue
 				}
@@ -265,6 +266,7 @@ func Scan(root string) (Registry, error) {
 	if err := fingerprintExecutionSources(root, &r); err != nil {
 		return r, err
 	}
+	applyReviewedEntries20261102(&r)
 	sort.Slice(r.Entries, func(i, j int) bool { return r.Entries[i].ID < r.Entries[j].ID })
 	return r, nil
 }
