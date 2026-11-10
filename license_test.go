@@ -193,3 +193,48 @@ func TestRenewalPreservesExpiredApplication(t *testing.T) {
 		t.Fatal("expired preserved application permits writes")
 	}
 }
+
+// TestReimbursementApplication 验证报销作为第七个商业应用可签发、
+// 验签、在有效期内允许业务写入，并在到期后拒绝写入。
+// 参数：t为测试上下文。
+// 返回值：无。
+func TestReimbursementApplication(t *testing.T) {
+	pub, key := keys(t)
+	l := fixture()
+	l.Applications = []Application{{"reimbursement", 200, 300, "FULL"}}
+	raw, err := Sign(l, "vendor-1", key)
+	if err != nil {
+		t.Fatalf("sign reimbursement: %v", err)
+	}
+	trusted := map[string]ed25519.PublicKey{"vendor-1": pub}
+	got, err := Verify(raw, trusted)
+	if err != nil || len(got.Applications) != 1 || got.Applications[0].Code != "reimbursement" {
+		t.Fatalf("verify reimbursement: %+v %v", got, err)
+	}
+	if err = Evaluate(got, "reimbursement", MUTATE_BUSINESS, time.Unix(250, 0), l.InstanceID, l.Environment); err != nil {
+		t.Fatalf("valid reimbursement denied: %v", err)
+	}
+	if Evaluate(got, "reimbursement", MUTATE_BUSINESS, time.Unix(300, 0), l.InstanceID, l.Environment) == nil {
+		t.Fatal("expired reimbursement permitted mutation")
+	}
+	if Evaluate(got, "unknown_application", MUTATE_BUSINESS, time.Unix(250, 0), l.InstanceID, l.Environment) == nil {
+		t.Fatal("unknown application permitted mutation")
+	}
+	unknown := fixture()
+	unknown.Applications = []Application{{"unknown_application", 200, 300, "FULL"}}
+	if _, err = Sign(unknown, "vendor-1", key); err == nil {
+		t.Fatal("unknown application signed")
+	}
+	// 应用数量上限随目录自适应：七个应用同许可仍有效。
+	all := fixture()
+	all.Applications = nil
+	for _, application := range []string{"customer_and_opportunity", "customer_portal", "contract_management", "project_management", "settlement", "data_analysis", "reimbursement"} {
+		all.Applications = append(all.Applications, Application{application, 200, 300, "FULL"})
+	}
+	if err = Validate(all); err != nil {
+		t.Fatalf("seven applications rejected: %v", err)
+	}
+	if _, err = Sign(all, "vendor-1", key); err != nil {
+		t.Fatalf("sign seven applications: %v", err)
+	}
+}

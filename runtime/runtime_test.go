@@ -15,6 +15,7 @@ import (
 	"time"
 
 	core "github.com/J-S-Te/license-core"
+	"github.com/J-S-Te/license-core/catalog"
 )
 
 type fixture struct {
@@ -593,5 +594,73 @@ func TestSnapshotValidationAndImmutableTrust(t *testing.T) {
 	delete(f.vendorKeys, "vendor")
 	if err := f.r.Evaluate(context.Background(), core.MUTATE_BUSINESS, f.now); err != nil {
 		t.Fatal("caller changed runtime trust", err)
+	}
+}
+
+// TestReimbursementBinding 验证运行快照绑定接受报销应用，
+// 并拒绝未知应用绑定。
+// 参数：t为测试上下文。
+// 返回值：无。
+func TestReimbursementBinding(t *testing.T) {
+	binding := Binding{"instance", "prod", "reimbursement", "reimbursement-api"}
+	if !validBinding(binding) {
+		t.Fatal("reimbursement binding rejected")
+	}
+	if validBinding(Binding{"instance", "prod", "unknown_application", "reimbursement-api"}) {
+		t.Fatal("unknown application binding accepted")
+	}
+	f := newFixture(t)
+	f.binding = binding
+	f.r = f.restart()
+	s := f.snapshot()
+	if _, err := VerifySnapshot(f.sign(s), binding, f.platformKeys, f.vendorKeys); err != nil {
+		t.Fatalf("reimbursement snapshot: %v", err)
+	}
+	f.apply(s)
+	if err := f.r.Evaluate(context.Background(), core.MUTATE_BUSINESS, f.now); err != nil {
+		t.Fatalf("reimbursement mutation denied: %v", err)
+	}
+}
+
+// TestUnifiedSevenApplicationSnapshotSupportsEveryConsumer 验证同一七应用许可供各系统快照消费。
+// 参数：t为仅使用临时测试信任和临时状态的测试上下文。
+// 返回值：无；未知应用、错实例及到期检查由原运行门禁继续约束。
+func TestUnifiedSevenApplicationSnapshotSupportsEveryConsumer(t *testing.T) {
+	f := newFixture(t)
+	codes := []string{"contract_management", "customer_and_opportunity", "customer_portal",
+		"data_analysis", "project_management", "reimbursement", "settlement"}
+	license := core.License{ProtocolVersion: core.ProtocolVersion, Issuer: core.Issuer,
+		ID: "unified-seven", Version: 1, CustomerID: "customer", ProductID: core.Product,
+		Environment: f.binding.Environment, InstanceID: f.binding.InstanceID,
+		IssuedAt: f.now.Unix() - 1000, NotBefore: f.now.Unix() - 100}
+	for _, code := range codes {
+		license.Applications = append(license.Applications, core.Application{
+			Code: code, NotBefore: f.now.Unix() - 100, ExpiresAt: f.now.Unix() + 600, Kind: "FULL"})
+	}
+	jws, err := core.Sign(license, "vendor", f.vendorPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, code := range codes {
+		components, err := catalog.Components(code)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, component := range components {
+			if component.Role == catalog.RoleInfrastructure {
+				continue
+			}
+			t.Run(component.ServiceID, func(t *testing.T) {
+				f.binding.Application, f.binding.ServiceID = code, component.ServiceID
+				f.path = filepath.Join(t.TempDir(), "state.json")
+				f.r = f.restart()
+				snapshot := f.snapshot()
+				snapshot.CurrentLicenseJWS = jws
+				f.apply(snapshot)
+				if err := f.r.Evaluate(context.Background(), core.MUTATE_BUSINESS, f.now); err != nil {
+					t.Fatalf("shared seven-app JWS rejected for %s/%s: %v", code, component.ServiceID, err)
+				}
+			})
+		}
 	}
 }
