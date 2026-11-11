@@ -145,3 +145,25 @@ func TestCatalogComponentsUseSupportedProtocolAndMode(t *testing.T) {
 		}
 	}
 }
+
+// TestCatalogApplicationsIncludeReimbursement 验证目录应用清单包含报销，
+// 且报销拥有两个非基础设施消费者。
+// 参数：t为测试上下文。
+// 返回值：无。
+func TestCatalogApplicationsIncludeReimbursement(t *testing.T) {
+	applications := Applications()
+	want := []string{"contract_management", "customer_and_opportunity", "customer_portal", "data_analysis", "project_management", "reimbursement", "settlement"}
+	if !reflect.DeepEqual(applications, want) {
+		t.Fatalf("applications = %v, want %v", applications, want)
+	}
+	if count := consumerCount(t, "reimbursement"); count != 2 {
+		t.Fatalf("reimbursement consumer count = %d, want 2", count)
+	}
+	if err := ValidateSelection("reimbursement", []string{"reimbursement-api", "reimbursement-worker"}); err != nil {
+		t.Fatalf("complete reimbursement selection rejected: %v", err)
+	}
+	applications[0] = "mutated"
+	if Applications()[0] != "contract_management" {
+		t.Fatal("catalog exposed mutable application list")
+	}
+}

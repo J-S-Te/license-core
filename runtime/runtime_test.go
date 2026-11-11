@@ -595,3 +595,28 @@ func TestSnapshotValidationAndImmutableTrust(t *testing.T) {
 		t.Fatal("caller changed runtime trust", err)
 	}
 }
+
+// TestReimbursementBinding 验证运行快照绑定接受报销应用，
+// 并拒绝未知应用绑定。
+// 参数：t为测试上下文。
+// 返回值：无。
+func TestReimbursementBinding(t *testing.T) {
+	binding := Binding{"instance", "prod", "reimbursement", "reimbursement-api"}
+	if !validBinding(binding) {
+		t.Fatal("reimbursement binding rejected")
+	}
+	if validBinding(Binding{"instance", "prod", "unknown_application", "reimbursement-api"}) {
+		t.Fatal("unknown application binding accepted")
+	}
+	f := newFixture(t)
+	f.binding = binding
+	f.r = f.restart()
+	s := f.snapshot()
+	if _, err := VerifySnapshot(f.sign(s), binding, f.platformKeys, f.vendorKeys); err != nil {
+		t.Fatalf("reimbursement snapshot: %v", err)
+	}
+	f.apply(s)
+	if err := f.r.Evaluate(context.Background(), core.MUTATE_BUSINESS, f.now); err != nil {
+		t.Fatalf("reimbursement mutation denied: %v", err)
+	}
+}
