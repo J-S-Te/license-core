@@ -60,6 +60,9 @@ func Scan(root string) (Registry, error) {
 	for app, list := range files {
 		inputs[app] = append([]string{}, list...)
 	}
+	for app, list := range reviewedRouteFiles20261110 {
+		inputs[app] = append(inputs[app], list...)
+	}
 	routes, err := filepath.Glob(filepath.Join(root, "customer_and_opportunity/internal/modules/*/routes.go"))
 	if err != nil {
 		return r, err
@@ -266,7 +269,17 @@ func Scan(root string) (Registry, error) {
 	if err := fingerprintExecutionSources(root, &r); err != nil {
 		return r, err
 	}
+	if err := appendReimbursementEntries(root, &r); err != nil {
+		return r, err
+	}
+	if err := appendSettlementReview20261110(root, &r); err != nil {
+		return r, err
+	}
+	if err := appendImportTasks20261110(root, &r); err != nil {
+		return r, err
+	}
 	applyReviewedEntries20261102(&r)
+	applyReviewedEntries20261110(&r)
 	sort.Slice(r.Entries, func(i, j int) bool { return r.Entries[i].ID < r.Entries[j].ID })
 	return r, nil
 }

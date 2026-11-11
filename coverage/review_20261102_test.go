@@ -39,6 +39,7 @@ func TestReviewedImplementationClosureCannotDisappear(t *testing.T) {
 	root := t.TempDir()
 	sources := append(append([]string{}, executionSources...), reviewedExecutionSources20261028...)
 	sources = append(sources, reviewedExecutionSources20261102...)
+	sources = append(sources, reviewedExecutionSources20261110...)
 	for _, source := range sources {
 		path := filepath.Join(root, source)
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {

@@ -143,3 +143,20 @@ reviewed. Refund confirmation also has an explicit business-write child policy.
 
 This source review does not change stricter historical-read runtime mappings,
 authorize a release signature or certify live routes, activities or deployment.
+
+## Source review 2026-11-10
+
+The reviewed registry now contains 894 source boundaries and 586 source digests
+across seven applications. The original 33 unclassified boundaries have individual
+semantic review records in `.ai/qa/reimbursement-license-closure-20261110/`.
+The review also restores omitted helper registrations, BI embedding branches,
+local administration, finite Settlement dispatch and import background methods.
+Settlement helper expansion is bound to exact reviewed source hashes; drift,
+removed methods and unknown expressions fail closed. Reimbursement scans all
+non-test implementation sources, including its recovery and archive tasks.
+
+This remains a source-expression inventory, not an expanded live-route count.
+Existing V1 approval artifacts were not re-signed. A separate isolated MySQL 8.4
+test passed the Reimbursement dual-consumer license protocol using temporary
+test trust and real SQL/JWT, runtime handlers, signed snapshots and natural ACKs.
+It does not certify full application processes, production trust or deployment.
