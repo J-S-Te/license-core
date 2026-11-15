@@ -36,7 +36,7 @@ var settlementReviewSources20261110 = []settlementReviewSource20261110{
 		{"POST /internal/v1/settlement/events/contract-imports", "MUTATE_BUSINESS", "serveContractImports:38→service.PrepareContractImport(contract_import.go:111)经ingestContract事务创建HOLD基线、计划与导入记录。"},
 		{"POST /internal/v1/settlement/contract-imports/:id/release", "MUTATE_BUSINESS", "serveContractImports:39→service.ReleaseContractImport(import_reconciliation.go:167)放行财务基线、导入及信用投递状态。"},
 	}},
-	{"contract_import_query.go", "9b1c35d84f8069698c96f9722948332713563380f8fc78e1b0db46ac2e23d92e", []settlementReviewRoute20261110{
+	{"contract_import_query.go", "9bf41c9001272444157c90f861702575342f9694b47ca9bea79b165bd67c9a1f", []settlementReviewRoute20261110{
 		{"GET /api/v1/settlement/contract-imports", "READ_HISTORY", "serveImportQueries:14在用户权限及全租户范围校验后分页读取已有导入状态，无恢复或放行写入。"},
 		{"GET /internal/v1/settlement/contract-imports/", "READ_HISTORY", "serveImportQueries:18机器前缀含尾斜杠；id为空时走分页列表，可信机器租户内只读既有导入状态。"},
 		{"GET /api/v1/settlement/contract-imports/:id", "READ_HISTORY", "serveImportQueries→importStatus:158读取既有基线、计划、责任及信用决定版本，不保存派生状态。"},
